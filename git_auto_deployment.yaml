@@ -1,0 +1,64 @@
+name: Deploy dbt Project to Snowflake
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: dbt-production-deployment
+  cancel-in-progress: false
+
+jobs:
+
+  deploy-dbt:
+
+    name: Deploy dbt Project
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Install Snowflake CLI
+        uses: snowflakedb/snowflake-cli-action@v2
+        with:
+          use-oidc: true
+
+      - name: Create Snowflake OIDC connection
+        run: |
+          snow connection add \
+            --connection-name dbt_deployment \
+            --account ${{ secrets.SNOWFLAKE_ACCOUNT }} \
+            --user ${{ vars.SNOWFLAKE_USER }} \
+            --authenticator WORKLOAD_IDENTITY \
+            --workload-identity-provider OIDC \
+            --role ${{ vars.SNOWFLAKE_ROLE }} \
+            --warehouse ${{ vars.SNOWFLAKE_WAREHOUSE }} \
+            --database PROD \
+            --schema MAITENANCE_DWH_DATA \
+            --no-interactive
+
+      - name: Validate Snowflake connection
+        run: |
+          snow connection test -c dbt_deployment
+
+      - name: Install dbt and resolve packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install "dbt-snowflake>=1.10,<1.12"
+          dbt deps
+          
+      - name: Deploy dbt Project
+        run: |
+          snow dbt deploy DBT_ACRE_DWH \
+          --source . \
+          --dbt-version 1.11.11 \
+          --force \
+          -c dbt_deployment
